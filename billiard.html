@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Three.js Billiards Game (Easy Control)</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #222; }
+    #msg {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: sans-serif;
+      color: gold;
+      font-size: 1.5em;
+      font-weight: bold;
+      text-shadow: 2px 2px 5px black;
+    }
+  </style>
+</head>
+<body>
+  <div id="msg">← → to Aim | SPACE to Shoot</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <script>
+    let scene, camera, renderer;
+    let cueBall, targetBall, cueStick;
+    let balls = [];
+    let velocity = new Map();
+    let angle = 0; // aiming angle
+    let isAiming = true;
+    const BALL_RADIUS = 0.5;
+    const TABLE_WIDTH = 20, TABLE_LENGTH = 10;
+    const POCKET_RADIUS = 1;
+
+    init();
+    animate();
+
+    function init() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x333333);
+
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 15, 15);
+      camera.lookAt(0, 0, 0);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const light = new THREE.PointLight(0xffffff, 1);
+      light.position.set(0, 10, 0);
+      scene.add(light);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+
+      // Table
+      const table = new THREE.Mesh(
+        new THREE.BoxGeometry(TABLE_WIDTH + 2, 1, TABLE_LENGTH + 2),
+        new THREE.MeshPhongMaterial({ color: 0x8B4513 })
+      );
+      table.position.y = -0.5;
+      scene.add(table);
+
+      const surface = new THREE.Mesh(
+        new THREE.PlaneGeometry(TABLE_WIDTH, TABLE_LENGTH),
+        new THREE.MeshPhongMaterial({ color: 0x006400 })
+      );
+      surface.rotation.x = -Math.PI / 2;
+      scene.add(surface);
+
+      // Balls
+      const ballGeo = new THREE.SphereGeometry(BALL_RADIUS, 32, 32);
+
+      cueBall = new THREE.Mesh(ballGeo, new THREE.MeshPhongMaterial({ color: 0xffffff }));
+      cueBall.position.set(0, BALL_RADIUS, -3);
+      scene.add(cueBall);
+
+      targetBall = new THREE.Mesh(ballGeo, new THREE.MeshPhongMaterial({ color: 0xff0000 }));
+      targetBall.position.set(0, BALL_RADIUS, 3);
+      scene.add(targetBall);
+
+      balls.push(cueBall, targetBall);
+      velocity.set(cueBall, new THREE.Vector3());
+      velocity.set(targetBall, new THREE.Vector3());
+
+      // Cue Stick
+      const stickGeo = new THREE.CylinderGeometry(0.1, 0.2, 8, 12);
+      const stickMat = new THREE.MeshPhongMaterial({ color: 0x996633 });
+      cueStick = new THREE.Mesh(stickGeo, stickMat);
+      cueStick.rotation.x = Math.PI / 2;
+      scene.add(cueStick);
+
+      // Controls
+      window.addEventListener("keydown", onKeyDown);
+      window.addEventListener("resize", onResize);
+    }
+
+    function onKeyDown(e) {
+      if (!isAiming) return;
+
+      if (e.code === "ArrowLeft") {
+        angle += 0.1;
+      } else if (e.code === "ArrowRight") {
+        angle -= 0.1;
+      } else if (e.code === "Space") {
+        shoot();
+      }
+    }
+
+    function shoot() {
+      isAiming = false;
+      const dir = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle)).normalize();
+      velocity.get(cueBall).copy(dir.multiplyScalar(10));
+      cueStick.visible = false;
+    }
+
+    function updatePhysics(dt) {
+      for (let ball of balls) {
+        let v = velocity.get(ball);
+        ball.position.add(v.clone().multiplyScalar(dt));
+
+        // Friction
+        v.multiplyScalar(0.985);
+
+        // Wall bounce
+        const halfW = TABLE_WIDTH / 2, halfL = TABLE_LENGTH / 2;
+        if (Math.abs(ball.position.x) > halfW - BALL_RADIUS) {
+          ball.position.x = Math.sign(ball.position.x) * (halfW - BALL_RADIUS);
+          v.x *= -1;
+        }
+        if (Math.abs(ball.position.z) > halfL - BALL_RADIUS) {
+          ball.position.z = Math.sign(ball.position.z) * (halfL - BALL_RADIUS);
+          v.z *= -1;
+        }
+      }
+
+      // Ball collision
+      const a = balls[0], b = balls[1];
+      const diff = b.position.clone().sub(a.position);
+      const dist = diff.length();
+      if (dist < BALL_RADIUS * 2) {
+        const normal = diff.normalize();
+        const va = velocity.get(a), vb = velocity.get(b);
+        const relativeVel = va.clone().sub(vb);
+        const sepVel = relativeVel.dot(normal);
+        if (sepVel > 0) {
+          const impulse = normal.multiplyScalar(sepVel);
+          va.sub(impulse);
+          vb.add(impulse);
+        }
+      }
+
+      // Pocket detection
+      if (targetBall.visible && Math.abs(targetBall.position.z) > TABLE_LENGTH / 2 - POCKET_RADIUS) {
+        targetBall.visible = false;
+        document.getElementById("msg").innerText = "🎱 Ball Pocketed!";
+      }
+
+      // Stop cue ball
+      if (velocity.get(cueBall).length() < 0.05 && !isAiming) {
+        velocity.get(cueBall).set(0, 0, 0);
+        cueStick.visible = true;
+        isAiming = true;
+        document.getElementById("msg").innerText = "← → to Aim | SPACE to Shoot";
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = 0.016;
+      updatePhysics(dt);
+
+      if (isAiming) {
+        const dist = 4;
+        cueStick.position.copy(cueBall.position);
+        cueStick.position.x -= Math.sin(angle) * dist;
+        cueStick.position.z -= Math.cos(angle) * dist;
+        cueStick.rotation.y = angle;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    function onResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+  </script>
+</body>
+</html>
