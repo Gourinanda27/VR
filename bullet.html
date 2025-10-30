@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Astro Shooter</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Tone.js for sound effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.44/Tone.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+        body {
+            font-family: 'Orbitron', sans-serif;
+            background-color: #0d0d1a;
+            color: #e0f2f1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        #game-container {
+            width: 95%;
+            max-width: 600px;
+            box-shadow: 0 0 40px rgba(0, 255, 255, 0.5);
+            border: 4px solid #00ffff;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background-color: #030a1c;
+            touch-action: none; /* Prevent unwanted touch actions */
+        }
+        .text-glow {
+            text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container" class="p-4 bg-gray-900">
+        <h1 class="text-center text-2xl font-bold mb-3 text-cyan-400 text-glow">
+            Astro Shooter (Use WASD or Arrows to Move, Space to Shoot)
+        </h1>
+        
+        <div id="game-info" class="flex justify-between p-2 mb-3 bg-gray-800 rounded-lg border border-cyan-700">
+            <span id="score" class="text-xl font-bold text-green-400">Score: 0</span>
+            <span id="lives" class="text-xl font-bold text-red-400">Lives: 3</span>
+        </div>
+
+        <canvas id="gameCanvas" width="600" height="400"></canvas>
+
+        <div class="flex justify-between mt-3 space-x-2">
+            <button id="startGameButton" class="w-full py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg shadow-lg transition duration-200">
+                Start Game
+            </button>
+            <button id="muteButton" class="w-24 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-lg transition duration-200">
+                Mute
+            </button>
+        </div>
+    </div>
+
+    <!-- Message/Game Over Modal -->
+    <div id="messageModal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center z-50">
+        <div class="bg-gray-800 p-8 rounded-xl shadow-2xl text-center border-4 border-cyan-500 max-w-sm">
+            <h2 id="modalTitle" class="text-3xl font-bold mb-4 text-cyan-400 text-glow">Game Over</h2>
+            <p id="modalMessage" class="text-lg mb-6 text-gray-200"></p>
+            <button id="restartButton" class="py-2 px-6 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition duration-200">
+                Restart
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Setup and Constants ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const livesElement = document.getElementById('lives');
+        const messageModal = document.getElementById('messageModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const restartButton = document.getElementById('restartButton');
+        const muteButton = document.getElementById('muteButton');
+        const startGameButton = document.getElementById('startGameButton');
+        
+        let animationFrameId;
+        let lastTime = 0;
+        let deltaTime = 0;
+
+        // --- Global Game State ---
+        let game = {
+            isRunning: false,
+            score: 0,
+            lives: 3,
+            isMuted: false,
+            keys: {}, // Key tracking
+            player: null,
+            bullets: [],
+            enemies: [],
+            particles: [],
+            enemySpawnRate: 1500, // ms
+            lastEnemySpawn: 0
+        };
+
+        // --- Tone.js Audio Setup (FIX for 'shootSound is not defined') ---
+        let shootSound; // <-- FIX: Define the sound variable globally
+        let explosionSound; // <-- Define another sound variable
+
+        function initializeAudio() {
+            try {
+                // FIX: Initialize the synth object here, where it can be referenced later.
+                shootSound = new Tone.PolySynth(Tone.Synth, {
+                    oscillator: { type: "square" },
+                    envelope: { attack: 0.005, decay: 0.1, sustain: 0.0, release: 0.1 }
+                }).toDestination();
+                
+                explosionSound = new Tone.NoiseSynth({
+                    noise: { type: "white" },
+                    envelope: { attack: 0.01, decay: 0.3, sustain: 0.0, release: 0.3 }
+                }).toDestination();
+                
+                console.log("Audio initialized successfully.");
+            } catch (error) {
+                console.error("Tone.js Audio Initialization failed:", error);
+            }
+        }
+
+        function playShootSound() {
+            if (!game.isMuted && shootSound) {
+                // Now shootSound is guaranteed to be defined if Tone.start was successful
+                shootSound.triggerAttackRelease("C5", "16n");
+            }
+        }
+
+        function playExplosionSound() {
+            if (!game.isMuted && explosionSound) {
+                explosionSound.triggerAttackRelease("8n");
+            }
+        }
+
+        // --- Game Objects ---
+
+        class Player {
+            constructor() {
+                this.x = canvas.width / 2;
+                this.y = canvas.height - 40;
+                this.width = 30;
+                this.height = 30;
+                this.speed = 200; // pixels per second
+                this.color = '#00ffff';
+                this.canShoot = true;
+                this.shootCooldown = 200; // ms
+                this.lastShotTime = 0;
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y - this.height / 2); // Top point
+                ctx.lineTo(this.x + this.width / 2, this.y + this.height / 2); // Bottom right
+                ctx.lineTo(this.x - this.width / 2, this.y + this.height / 2); // Bottom left
+                ctx.closePath();
+                ctx.fill();
+
+                // Draw cockpit glow
+                ctx.fillStyle = 'rgba(0, 255, 255, 0.5)';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            update(dt) {
+                let dx = 0;
+                let dy = 0;
+                const moveDist = this.speed * dt;
+
+                if (game.keys['ArrowLeft'] || game.keys['a']) dx -= moveDist;
+                if (game.keys['ArrowRight'] || game.keys['d']) dx += moveDist;
+                if (game.keys['ArrowUp'] || game.keys['w']) dy -= moveDist;
+                if (game.keys['ArrowDown'] || game.keys['s']) dy += moveDist;
+
+                // Update position
+                this.x += dx;
+                this.y += dy;
+
+                // Keep player within bounds
+                this.x = Math.max(this.width / 2, Math.min(canvas.width - this.width / 2, this.x));
+                this.y = Math.max(this.height / 2, Math.min(canvas.height - this.height / 2, this.y));
+
+                // Handle shooting
+                if ((game.keys[' '] || game.keys['Space']) && (lastTime - this.lastShotTime > this.shootCooldown)) {
+                    this.shoot();
+                    this.lastShotTime = lastTime;
+                }
+            }
+
+            shoot() {
+                game.bullets.push(new Bullet(this.x, this.y - this.height / 2));
+                playShootSound();
+            }
+        }
+
+        class Bullet {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.width = 4;
+                this.height = 10;
+                this.speed = 400; // pixels per second
+                this.color = '#ff66ff';
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
+            }
+
+            update(dt) {
+                this.y -= this.speed * dt;
+            }
+        }
+
+        class Enemy {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = 25;
+                this.speed = 80 + Math.random() * 50; // pixels per second
+                this.color = '#ff4136';
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Draw a cross on the enemy
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(this.x - 5, this.y - 5);
+                ctx.lineTo(this.x + 5, this.y + 5);
+                ctx.moveTo(this.x + 5, this.y - 5);
+                ctx.lineTo(this.x - 5, this.y + 5);
+                ctx.stroke();
+            }
+
+            update(dt) {
+                this.y += this.speed * dt;
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.radius = Math.random() * 2 + 1;
+                this.velocity = {
+                    x: (Math.random() - 0.5) * 50,
+                    y: (Math.random() - 0.5) * 50
+                };
+                this.alpha = 1;
+                this.friction = 0.99;
+                this.gravity = 10;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            update(dt) {
+                this.velocity.x *= this.friction;
+                this.velocity.y *= this.friction;
+                this.y += this.velocity.y * dt + this.gravity * dt;
+                this.x += this.velocity.x * dt;
+                this.alpha -= 0.02;
+            }
+        }
+
+
+        // --- Game Logic Functions ---
+
+        function initGame() {
+            game.isRunning = false;
+            game.score = 0;
+            game.lives = 3;
+            game.player = new Player();
+            game.bullets = [];
+            game.enemies = [];
+            game.particles = [];
+            game.lastEnemySpawn = lastTime;
+            
+            scoreElement.textContent = `Score: ${game.score}`;
+            livesElement.textContent = `Lives: ${game.lives}`;
+            
+            // Initial draw to show the ship
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            game.player.draw();
+        }
+
+        function spawnEnemy() {
+            const x = Math.random() * (canvas.width - 50) + 25;
+            const y = -25;
+            game.enemies.push(new Enemy(x, y));
+            game.lastEnemySpawn = lastTime;
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 15; i++) {
+                game.particles.push(new Particle(x, y, color));
+            }
+            playExplosionSound();
+        }
+
+        function checkCollisions() {
+            // Bullet-Enemy Collisions
+            game.bullets.forEach((bullet, bIndex) => {
+                game.enemies.forEach((enemy, eIndex) => {
+                    const dx = bullet.x - enemy.x;
+                    const dy = bullet.y - enemy.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < (enemy.size / 2) + (bullet.height / 2)) {
+                        // Collision!
+                        createExplosion(enemy.x, enemy.y, enemy.color);
+                        game.score += 10;
+                        scoreElement.textContent = `Score: ${game.score}`;
+
+                        // Remove collided objects
+                        game.bullets.splice(bIndex, 1);
+                        game.enemies.splice(eIndex, 1);
+                    }
+                });
+            });
+
+            // Player-Enemy Collisions
+            game.enemies.forEach((enemy, eIndex) => {
+                const dx = game.player.x - enemy.x;
+                const dy = game.player.y - enemy.y;
+                // Simple distance check for simplicity
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < (enemy.size / 2) + (game.player.width / 2)) {
+                    // Player hit!
+                    createExplosion(game.player.x, game.player.y, game.player.color);
+                    game.lives -= 1;
+                    livesElement.textContent = `Lives: ${game.lives}`;
+
+                    // Remove enemy
+                    game.enemies.splice(eIndex, 1);
+
+                    if (game.lives <= 0) {
+                        endGame('Game Over!', `Your final score is ${game.score}.`);
+                    }
+                }
+            });
+        }
+
+        function update(dt) {
+            if (!game.isRunning) return;
+
+            // Update player
+            game.player.update(dt);
+
+            // Update bullets, filter out-of-bounds
+            game.bullets.forEach(b => b.update(dt));
+            game.bullets = game.bullets.filter(b => b.y > 0);
+
+            // Update enemies, filter out-of-bounds (missed)
+            game.enemies.forEach(e => e.update(dt));
+            game.enemies = game.enemies.filter(e => {
+                if (e.y < canvas.height + e.size) {
+                    return true;
+                } else {
+                    // Enemy missed, but don't penalize lives for simplicity in this version
+                    return false;
+                }
+            });
+
+            // Update particles, filter faded
+            game.particles.forEach(p => p.update(dt));
+            game.particles = game.particles.filter(p => p.alpha > 0);
+
+            // Spawn new enemies
+            if (lastTime - game.lastEnemySpawn > game.enemySpawnRate) {
+                spawnEnemy();
+                // Gradually increase difficulty by decreasing spawn rate (down to 500ms)
+                game.enemySpawnRate = Math.max(500, game.enemySpawnRate - 5);
+            }
+
+            checkCollisions();
+
+            if (game.lives <= 0) {
+                endGame('Game Over!', `Your final score is ${game.score}.`);
+            }
+        }
+
+        function draw() {
+            // Clear canvas
+            ctx.fillStyle = '#030a1c';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw game objects
+            game.player.draw();
+            game.bullets.forEach(b => b.draw());
+            game.enemies.forEach(e => e.draw());
+            game.particles.forEach(p => p.draw());
+        }
+
+        function gameLoop(timestamp) {
+            if (!game.isRunning) return;
+
+            // Calculate delta time in seconds
+            deltaTime = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function endGame(title, message) {
+            game.isRunning = false;
+            cancelAnimationFrame(animationFrameId);
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            messageModal.classList.remove('hidden');
+        }
+
+        function startGame() {
+            // Check if audio context is running before starting the game
+            if (Tone.context.state !== 'running') {
+                console.error("Audio context not running. Cannot start game.");
+                return;
+            }
+            
+            messageModal.classList.add('hidden');
+            startGameButton.classList.add('hidden');
+            initGame();
+            game.isRunning = true;
+            lastTime = performance.now(); // Reset lastTime for accurate delta
+            gameLoop(lastTime);
+        }
+
+        // --- Event Listeners ---
+
+        window.addEventListener('keydown', (e) => {
+            game.keys[e.key] = true;
+            // Prevent spacebar from scrolling page
+            if (e.key === ' ' || e.key === 'Space') e.preventDefault();
+        });
+
+        window.addEventListener('keyup', (e) => {
+            game.keys[e.key] = false;
+        });
+        
+        // Handle window resize for responsiveness
+        function resizeCanvas() {
+            const container = document.getElementById('game-container');
+            // Maintain a fixed aspect ratio (e.g., 3:2) or use a percentage
+            const newWidth = container.clientWidth - 32; // Container width minus padding
+            const newHeight = newWidth * (2/3); // 3:2 aspect ratio
+            
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+            
+            // Re-draw initial state or force a game loop draw if running
+            if (!game.isRunning) {
+                initGame(); 
+            }
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        restartButton.addEventListener('click', startGame);
+
+        muteButton.addEventListener('click', () => {
+            game.isMuted = !game.isMuted;
+            muteButton.textContent = game.isMuted ? 'Unmute' : 'Mute';
+            muteButton.classList.toggle('bg-red-600', game.isMuted);
+            muteButton.classList.toggle('bg-indigo-600', !game.isMuted);
+        });
+        
+        // Audio Initialization Handler
+        startGameButton.addEventListener('click', async () => {
+            if (Tone.context.state !== 'running') {
+                await Tone.start();
+                initializeAudio();
+            }
+            startGame();
+        });
+
+        // --- Initial Load ---
+        window.onload = function() {
+            resizeCanvas(); // Set initial canvas size
+            initGame();
+        }
+
+    </script>
+
+</body>
+</html>
