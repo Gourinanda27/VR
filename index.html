@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hen Egg Catcher — 3JS</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #87ceeb;
+      font-family: 'Poppins', sans-serif;
+    }
+    #overlay {
+      position: fixed;
+      left: 12px;
+      top: 12px;
+      color: white;
+      z-index: 10;
+      text-shadow: 1px 1px 3px black;
+    }
+    #score {
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    #instructions {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div id="score">Score: 0</div>
+    <div id="instructions">
+      Click or press <b>Space</b> to lay an egg.<br>
+      Move basket with <b>Mouse</b> or <b>Arrow keys</b>.
+    </div>
+  </div>
+
+  <!-- 3JS Library -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+
+  <!-- Your JS Game File -->
+  <script src="game.js"></script>
+</body>
+</html>
