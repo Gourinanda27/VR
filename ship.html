@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Treasure Hunt</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87ceeb; }
+        canvas { display: block; }
+        #score-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 24px;
+            font-family: sans-serif;
+            text-shadow: 2px 2px 4px #000000;
+        }
+        #win-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: gold;
+            font-size: 48px;
+            font-family: sans-serif;
+            text-align: center;
+            text-shadow: 4px 4px 8px #000000;
+            display: none; /* Hidden until the game ends */
+        }
+    </style>
+</head>
+<body>
+    <div id="score-container">Score: <span id="score">0</span></div>
+    <div id="win-message">🏆 You Collected All the Treasure! 🏆</div>
+
+    <script>
+        // --- Global Variables ---
+        let scene, camera, renderer, ship;
+        let keys = {}; // To track key presses (WASD/Arrow keys)
+        let score = 0;
+        const SHIP_SPEED = 0.15;
+        const NUM_CHESTS = 5;
+        let chests = [];
+        const scoreElement = document.getElementById('score');
+        const winMessageElement = document.getElementById('win-message');
+        let clock = new THREE.Clock(); // For chest bobbing animation and smooth movement
+        const collectionSound = new Audio('data:audio/wav;base64,UklGRl9vT1JXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABlBZmFjdG9yZyBhZ3Nkc3BqZGFnZCBqZ2RhaWRoIGRnZGh3IGQgaGdnYWRoZ3NkJHNmZmFzIGdnYXdhZ2FhZCBzZGdnaGdhZ2FzIGhkZ2FoZ2Fhc2cgZ2FzZGdhaGdnYWRzaGcgZ2FnYWdhZGdhaWdkZ2FnZ2FnZHdhIGdkZ2F3Z2FnZGFzZ2RzZ2RzaGdhc3c=').play;
+        // NOTE: The above base64 is a simple, very short placeholder sound. It might not play in all browsers due to autoplay restrictions.
+        // A better approach would be to load a real .mp3 or .wav file.
+
+        // --- Initialization Function ---
+        function init() {
+            // 1. Setup Scene, Camera, Renderer
+            scene = new THREE.Scene();
+            
+            // Set a bluish/oceanic background
+            scene.background = new THREE.Color(0x87ceeb); // Light Sky Blue
+
+            // PerspectiveCamera(FOV, Aspect Ratio, Near Clipping, Far Clipping)
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // 2. Add Lighting (Ambient and Directional)
+            const ambientLight = new THREE.AmbientLight(0x404040, 5); // soft white light
+            scene.add(ambientLight);
+
+            const sunLight = new THREE.DirectionalLight(0xffffff, 2);
+            sunLight.position.set(50, 50, 50); // Position the light like the sun
+            scene.add(sunLight);
+
+            // 3. Create the Ocean Plane
+            const oceanGeometry = new THREE.PlaneGeometry(100, 100);
+            const oceanMaterial = new THREE.MeshPhongMaterial({ color: 0x0077be, side: THREE.DoubleSide }); // Deep blue
+            const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
+            ocean.rotation.x = Math.PI / 2; // Rotate to be flat (horizontal)
+            scene.add(ocean);
+
+            // 4. Create the Player Ship (Simple Box)
+            const shipGeometry = new THREE.BoxGeometry(1, 1, 3); // Longer in the Z-direction
+            const shipMaterial = new THREE.MeshPhongMaterial({ color: 0x8b4513 }); // Brown (wood)
+            ship = new THREE.Mesh(shipGeometry, shipMaterial);
+            ship.position.y = 0.5; // Sit on the water surface
+            scene.add(ship);
+            
+            // 5. Spawn Treasure Chests
+            spawnChests(NUM_CHESTS);
+
+            // 6. Initial Camera Position (behind the ship)
+            // Camera position is set relative to the ship inside the game loop for following.
+            camera.position.set(0, 10, -15);
+            camera.lookAt(ship.position);
+
+            // 7. Add Event Listeners for Movement
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Start the game loop
+            animate();
+        }
+
+        // --- Chest Spawning Function ---
+        function spawnChests(count) {
+            const chestGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const chestMaterial = new THREE.MeshPhongMaterial({ color: 0xffd700 }); // Gold color
+
+            for (let i = 0; i < count; i++) {
+                const chest = new THREE.Mesh(chestGeometry, chestMaterial);
+
+                // Random position within the plane (100x100 means -50 to 50)
+                chest.position.x = Math.random() * 80 - 40;
+                chest.position.z = Math.random() * 80 - 40;
+                chest.position.y = 0.75; // Slightly above water
+
+                // Store initial Y position for bobbing animation
+                chest.userData.initialY = chest.position.y; 
+                chest.userData.isCollected = false;
+
+                chests.push(chest);
+                scene.add(chest);
+            }
+        }
+
+        // --- Game Logic Functions ---
+
+        function handleInput() {
+            // Forward/Backward Movement (Z-axis)
+            if (keys['w'] || keys['W'] || keys['ArrowUp']) {
+                ship.translateZ(SHIP_SPEED);
+            }
+            if (keys['s'] || keys['S'] || keys['ArrowDown']) {
+                ship.translateZ(-SHIP_SPEED * 0.5); // Slower reverse
+            }
+
+            // Rotation (Y-axis)
+            if (keys['a'] || keys['A'] || keys['ArrowLeft']) {
+                ship.rotation.y += 0.05;
+            }
+            if (keys['d'] || keys['D'] || keys['ArrowRight']) {
+                ship.rotation.y -= 0.05;
+            }
+        }
+
+        function updateCamera() {
+            // Define an offset for a third-person view
+            const cameraOffset = new THREE.Vector3(0, 8, -12); // Up 8, Back 12
+            
+            // Get the ship's world position and rotation
+            const shipWorldPosition = ship.position.clone();
+
+            // Apply the offset *relative to the ship's rotation*
+            cameraOffset.applyQuaternion(ship.quaternion);
+
+            // Calculate the target camera position
+            const targetCameraPosition = shipWorldPosition.add(cameraOffset);
+
+            // Smoothly move the camera (optional, but nice)
+            camera.position.lerp(targetCameraPosition, 0.1);
+
+            // Make the camera always look at the ship
+            camera.lookAt(ship.position);
+        }
+
+        function checkCollisions(deltaTime) {
+            // Get the ship's current bounding box/sphere for simple collision
+            const shipBBox = new THREE.Box3().setFromObject(ship);
+
+            for (let i = chests.length - 1; i >= 0; i--) {
+                const chest = chests[i];
+                if (chest.userData.isCollected) continue;
+
+                // Simple AABB-AABB collision check
+                const chestBBox = new THREE.Box3().setFromObject(chest);
+
+                if (shipBBox.intersectsBox(chestBBox)) {
+                    // Collision detected!
+                    
+                    // 1. Update Score
+                    score++;
+                    scoreElement.textContent = score;
+
+                    // 2. Remove the Chest
+                    scene.remove(chest);
+                    chest.userData.isCollected = true; // Mark as collected
+                    chests.splice(i, 1); // Remove from the array
+
+                    // 3. Play Sound (if successful)
+                    try { collectionSound(); } catch (e) {}
+
+                    // 4. Check Win Condition
+                    if (chests.length === 0) {
+                        winMessageElement.style.display = 'block';
+                        // Stop the animation loop after the current frame
+                        cancelAnimationFrame(requestAnimationFrameID);
+                    }
+                }
+            }
+        }
+
+        function updateChests(time) {
+            // Optional: Floating animation (up-down bobbing)
+            for (const chest of chests) {
+                if (!chest.userData.isCollected) {
+                    // Use a sine wave for smooth up/down motion
+                    // Math.sin(time * speed) * amplitude
+                    chest.position.y = chest.userData.initialY + Math.sin(time * 2) * 0.1; 
+                }
+            }
+        }
+
+        // --- Main Game Loop (Animation) ---
+        let requestAnimationFrameID;
+        function animate() {
+            requestAnimationFrameID = requestAnimationFrame(animate);
+
+            const deltaTime = clock.getDelta(); // Time elapsed since last frame
+            const elapsedTime = clock.getElapsedTime(); // Total time elapsed
+
+            handleInput();
+            updateCamera();
+            updateChests(elapsedTime);
+            checkCollisions(deltaTime);
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Event Handlers ---
+
+        function onKeyDown(event) {
+            keys[event.key] = true;
+        }
+
+        function onKeyUp(event) {
+            keys[event.key] = false;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Initialize the game when the page loads
+        init();
+    </script>
+</body>
+</html>
